@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Cloud Cost Monitor</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+  <header>
+    <div class="header-content">
+      <div class="logo">
+        <span class="cloud-icon">☁️</span>
+        <h1>Cloud Cost Monitor</h1>
+      </div>
+      <p class="subtitle">Real-time Azure vs AWS pricing dashboard</p>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- Category Filter -->
+    <section class="filters">
+<button class="filter-btn active" onclick="filterCategory(this, 'all')">All Services</button>
+    <button class="filter-btn" onclick="filterCategory(this, 'Compute')">💻 Compute</button>
+    <button class="filter-btn" onclick="filterCategory(this, 'Database')">🗄️ Database</button>
+    <button class="filter-btn" onclick="filterCategory(this, 'Storage')">💾 Storage</button>
+    <button class="filter-btn" onclick="filterCategory(this, 'Serverless')">⚡ Serverless</button>
+    <button class="filter-btn" onclick="filterCategory(this, 'Containers')">🐳 Containers</button>
+    </section>
+
+    <!-- Summary Cards -->
+    <section class="summary-cards">
+      <div class="card azure-card">
+        <div class="card-header">
+          <span class="provider-badge azure">Azure</span>
+        </div>
+        <h2 id="azure-count">0</h2>
+        <p>Services tracked</p>
+      </div>
+      <div class="card aws-card">
+        <div class="card-header">
+          <span class="provider-badge aws">AWS</span>
+        </div>
+        <h2 id="aws-count">0</h2>
+        <p>Services tracked</p>
+      </div>
+      <div class="card savings-card">
+        <div class="card-header">
+          <span class="provider-badge savings">💡 Insight</span>
+        </div>
+        <h2 id="cheaper-provider">—</h2>
+        <p>Cheaper on average</p>
+      </div>
+    </section>
+
+    <!-- Chart -->
+    <section class="chart-section">
+      <h2>Price Comparison — Compute Services ($/hr)</h2>
+      <div class="chart-container">
+        <canvas id="priceChart"></canvas>
+      </div>
+    </section>
+
+    <!-- Price Table -->
+    <section class="table-section">
+      <h2>Service Pricing Details</h2>
+      <div class="table-wrapper">
+        <table id="price-table">
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Service</th>
+              <th>Category</th>
+              <th>Description</th>
+              <th>Price</th>
+            </tr>
+          </thead>
+          <tbody id="table-body">
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>
+    <p>Built with Python & Flask · David García · 
+      <a href="https://github.com/dabidpq" target="_blank">GitHub</a>
+    </p>
+  </footer>
+
+  <script>
+    let allData = {};
+    let chart = null;
+
+    async function loadData() {
+      const res = await fetch('/api/prices');
+      allData = await res.json();
+      updateSummary(allData);
+      renderTable(allData);
+      renderChart(allData);
+    }
+
+    function updateSummary(data) {
+      document.getElementById('azure-count').textContent = data.azure.length;
+      document.getElementById('aws-count').textContent = data.aws.length;
+
+      const azureAvg = data.azure
+        .filter(s => s.price_per_hour)
+        .reduce((a, b) => a + b.price_per_hour, 0) / data.azure.filter(s => s.price_per_hour).length;
+
+      const awsAvg = data.aws
+        .filter(s => s.price_per_hour)
+        .reduce((a, b) => a + b.price_per_hour, 0) / data.aws.filter(s => s.price_per_hour).length;
+
+      document.getElementById('cheaper-provider').textContent = azureAvg < awsAvg ? 'Azure' : 'AWS';
+    }
+
+    function renderTable(data, category = 'all') {
+      const tbody = document.getElementById('table-body');
+      tbody.innerHTML = '';
+
+      const allServices = [
+        ...data.azure.map(s => ({ ...s, provider: 'Azure' })),
+        ...data.aws.map(s => ({ ...s, provider: 'AWS' }))
+      ];
+
+      const filtered = category === 'all'
+        ? allServices
+        : allServices.filter(s => s.category === category);
+
+      filtered.forEach(s => {
+        const price = s.price_per_hour
+          ? `$${s.price_per_hour.toFixed(4)}/hr`
+          : s.price_per_gb
+          ? `$${s.price_per_gb}/GB`
+          : `$${s.price_per_million}/1M req`;
+
+        const row = `
+          <tr class="${s.provider.toLowerCase()}-row">
+            <td><span class="provider-badge ${s.provider.toLowerCase()}">${s.provider}</span></td>
+            <td>${s.service}</td>
+            <td>${s.category}</td>
+            <td>${s.description}</td>
+            <td class="price">${price}</td>
+          </tr>`;
+        tbody.innerHTML += row;
+      });
+    }
+
+    function renderChart(data) {
+      const computeAzure = data.azure.filter(s => s.category === 'Compute');
+      const computeAws = data.aws.filter(s => s.category === 'Compute');
+
+      const labels = computeAzure.map(s => s.service);
+      const azurePrices = computeAzure.map(s => s.price_per_hour);
+      const awsPrices = computeAws.map(s => s.price_per_hour);
+
+      if (chart) chart.destroy();
+
+      const ctx = document.getElementById('priceChart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'Azure',
+              data: azurePrices,
+              backgroundColor: 'rgba(0, 120, 212, 0.7)',
+              borderColor: '#0078D4',
+              borderWidth: 2,
+              borderRadius: 6,
+            },
+            {
+              label: 'AWS',
+              data: awsPrices,
+              backgroundColor: 'rgba(255, 153, 0, 0.7)',
+              borderColor: '#FF9900',
+              borderWidth: 2,
+              borderRadius: 6,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { labels: { color: '#ccc' } }
+          },
+          scales: {
+            x: { ticks: { color: '#ccc' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+            y: { ticks: { color: '#ccc' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+          }
+        }
+      });
+    }
+
+    function filterCategory(btn, category) {
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderTable(allData, category);
+    }
+
+    loadData();
+  </script>
+
+</body>
+</html>
